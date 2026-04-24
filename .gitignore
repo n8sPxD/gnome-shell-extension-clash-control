@@ -1,0 +1,7 @@
+# Build artifacts
+schemas/gschemas.compiled
+locale/
+*.mo
+
+# IDE / tools
+.claude/

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.gnome-clash-control"
+          path="/org/gnome/shell/extensions/gnome-clash-control/">
+
+    <key name="clash-host" type="s">
+      <default>"127.0.0.1"</default>
+      <summary>Clash API Host</summary>
+      <description>The host address of Clash RESTful API</description>
+    </key>
+
+    <key name="clash-port" type="i">
+      <default>9090</default>
+      <summary>Clash API Port</summary>
+      <description>The port of Clash RESTful API</description>
+    </key>
+
+    <key name="clash-secret" type="s">
+      <default>""</default>
+      <summary>Clash API Secret</summary>
+      <description>The authentication secret for Clash API</description>
+    </key>
+
+    <key name="proxy-port-http" type="i">
+      <default>7890</default>
+      <summary>HTTP Proxy Port</summary>
+      <description>The HTTP proxy port of Clash</description>
+    </key>
+
+    <key name="proxy-port-socks" type="i">
+      <default>7891</default>
+      <summary>SOCKS Proxy Port</summary>
+      <description>The SOCKS5 proxy port of Clash</description>
+    </key>
+
+  </schema>
+</schemalist>

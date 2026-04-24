@@ -1,0 +1,72 @@
+# Chinese (Simplified) translation for GNOME Clash Control.
+# Copyright (C) 2026
+# This file is distributed under the same license as the GNOME Clash Control package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: gnome-clash-control@n8spxd\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-04-23\n"
+"PO-Revision-Date: 2026-04-23\n"
+"Last-Translator: \n"
+"Language-Team: Chinese (Simplified)\n"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+# extension.js
+msgid "Clash Control"
+msgstr "Clash 控制"
+
+msgid "Connecting..."
+msgstr "连接中..."
+
+msgid "System Proxy"
+msgstr "系统代理"
+
+msgid "TUN Mode"
+msgstr "TUN 模式"
+
+msgid "Rule Mode"
+msgstr "规则模式"
+
+msgid "Global Mode"
+msgstr "全局模式"
+
+msgid "Direct Mode"
+msgstr "直连模式"
+
+msgid "Settings"
+msgstr "设置"
+
+msgid "Connected"
+msgstr "已连接"
+
+msgid "Disconnected"
+msgstr "未连接"
+
+# prefs.js
+msgid "GNOME Clash Control"
+msgstr "GNOME Clash Control"
+
+msgid "Clash API Settings"
+msgstr "Clash API 设置"
+
+msgid "API Host"
+msgstr "API 地址"
+
+msgid "API Port"
+msgstr "API 端口"
+
+msgid "API Secret"
+msgstr "API 密钥"
+
+msgid "Proxy Ports"
+msgstr "代理端口"
+
+msgid "HTTP/HTTPS Port"
+msgstr "HTTP/HTTPS 端口"
+
+msgid "SOCKS5 Port"
+msgstr "SOCKS5 端口"

@@ -1,0 +1,9 @@
+{
+  "uuid": "gnome-clash-control@n8spxd",
+  "name": "Clash Control",
+  "description": "Control Clash proxy in GNOME Quick Settings",
+  "shell-version": ["49", "50"],
+  "settings-schema": "org.gnome.shell.extensions.gnome-clash-control",
+  "url": "https://github.com/n8sPxD/gnome-shell-extension-clash-control",
+  "version": 1
+}
