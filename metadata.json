@@ -5,5 +5,5 @@
   "shell-version": ["49", "50"],
   "settings-schema": "org.gnome.shell.extensions.gnome-clash-control",
   "url": "https://github.com/n8sPxD/gnome-shell-extension-clash-control",
-  "version": 1
+  "version": 2
 }

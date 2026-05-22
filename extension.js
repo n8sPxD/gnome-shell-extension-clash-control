@@ -22,7 +22,11 @@ function _modeLabel(mode) {
     })[mode];
 }
 
-function _apiCall(session, method, url, headers, body = null) {
+function _isCancelledError(error) {
+    return error?.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED) ?? false;
+}
+
+function _apiCall(session, method, url, headers, body = null, cancellable = null) {
     const message = Soup.Message.new(method, url);
     for (const [key, value] of Object.entries(headers))
         message.request_headers.append(key, value);
@@ -30,7 +34,7 @@ function _apiCall(session, method, url, headers, body = null) {
         message.set_request_body_from_bytes('application/json', new GLib.Bytes(new TextEncoder().encode(body)));
 
     return new Promise((resolve, reject) => {
-        session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (s, result) => {
+        session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, cancellable, (s, result) => {
             try {
                 const bytes = s.send_and_read_finish(result);
                 const status = message.get_status();
@@ -43,6 +47,27 @@ function _apiCall(session, method, url, headers, body = null) {
             }
         });
     });
+}
+
+class SignalBag {
+    constructor() {
+        this._items = [];
+    }
+
+    add(object, id) {
+        this._items.push([object, id]);
+        return id;
+    }
+
+    destroy() {
+        for (const [object, id] of this._items.splice(0)) {
+            try {
+                object.disconnect(id);
+            } catch (e) {
+                logError(e);
+            }
+        }
+    }
 }
 
 const ProxySwitchMenuItem = GObject.registerClass({
@@ -71,6 +96,9 @@ const ClashToggle = GObject.registerClass({
         this._settings = settings;
         this._session = session;
         this._proxySettings = proxySettings;
+        this._destroyed = false;
+        this._signals = new SignalBag();
+        this._cancellable = new Gio.Cancellable();
         this.set({ enabled: false });
         this._connected = false;
         this._currentMode = 'rule';
@@ -79,12 +107,18 @@ const ClashToggle = GObject.registerClass({
 
         // System Proxy
         this._proxyItem = new ProxySwitchMenuItem(_('System Proxy'), false);
-        this._proxyItem.connect('toggled', (_, state) => this._setSystemProxy(state));
+        this._signals.add(
+            this._proxyItem,
+            this._proxyItem.connect('toggled', (_, state) => this._setSystemProxy(state)),
+        );
         this.menu.addMenuItem(this._proxyItem);
 
         // TUN Mode
         this._tunItem = new ProxySwitchMenuItem(_('TUN Mode'), false);
-        this._tunItem.connect('toggled', (_, state) => this._setTunMode(state));
+        this._signals.add(
+            this._tunItem,
+            this._tunItem.connect('toggled', (_, state) => this._setTunMode(state)),
+        );
         this.menu.addMenuItem(this._tunItem);
 
         // Separator
@@ -94,7 +128,10 @@ const ClashToggle = GObject.registerClass({
         this._modeItems = {};
         for (const mode of PROXY_MODES) {
             const item = new PopupMenu.PopupMenuItem(_modeLabel(mode));
-            item.connect('activate', () => this._setProxyMode(mode));
+            this._signals.add(
+                item,
+                item.connect('activate', () => this._setProxyMode(mode)),
+            );
             item.setOrnament(mode === 'rule' ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NONE);
             this.menu.addMenuItem(item);
             this._modeItems[mode] = item;
@@ -105,19 +142,29 @@ const ClashToggle = GObject.registerClass({
 
         // Settings
         const settingsItem = new PopupMenu.PopupMenuItem(_('Settings'));
-        settingsItem.connect('activate', () => this._openSettings());
+        this._signals.add(
+            settingsItem,
+            settingsItem.connect('activate', () => this._openSettings()),
+        );
         this.menu.addMenuItem(settingsItem);
 
         // Listen for system proxy changes from outside
-        this._proxyModeHandler = this._proxySettings.main.connect('changed::mode', () => {
+        this._signals.add(this._proxySettings.main, this._proxySettings.main.connect('changed::mode', () => {
+            if (this._destroyed)
+                return;
+
             const mode = this._proxySettings.main.get_string('mode');
             this._proxyItem.setToggleState(mode === 'manual');
-        });
+        }));
 
         // Refresh state when menu opens
-        this._menuOpenHandler = this.menu.connect('open-state-changed', (_, isOpen) => {
-            if (isOpen) this._refreshState();
-        });
+        this._signals.add(
+            this.menu,
+            this.menu.connect('open-state-changed', (_, isOpen) => {
+                if (!this._destroyed && isOpen)
+                    this._refreshState();
+            }),
+        );
 
         this._refreshState();
     }
@@ -135,7 +182,29 @@ const ClashToggle = GObject.registerClass({
         return headers;
     }
 
+    async _apiCall(method, path, body = null) {
+        if (this._destroyed || !this._session || !this._cancellable)
+            return null;
+
+        const bytes = await _apiCall(
+            this._session,
+            method,
+            this._getApiUrl(path),
+            this._getHeaders(),
+            body,
+            this._cancellable,
+        );
+
+        if (this._destroyed)
+            return null;
+
+        return bytes;
+    }
+
     _setConnected(connected) {
+        if (this._destroyed)
+            return;
+
         this._connected = connected;
         this.checked = connected;
         this.set({ enabled: true });
@@ -153,21 +222,29 @@ const ClashToggle = GObject.registerClass({
         }
     }
 
-    _refreshState() {
-        _apiCall(this._session, 'GET', this._getApiUrl('/configs'), this._getHeaders())
-            .then(bytes => {
-                const config = JSON.parse(new TextDecoder().decode(bytes.get_data()));
-                this._setConnected(true);
-                this._tunItem.setToggleState(config.tun?.enable ?? false);
-                this._updateModeUI(config.mode ?? 'rule');
-            })
-            .catch(e => {
-                log(`[GNOME Clash Control] Failed to fetch state: ${e.message}`);
-                this._setConnected(false);
-            });
+    async _refreshState() {
+        try {
+            const bytes = await this._apiCall('GET', '/configs');
+            if (!bytes || this._destroyed)
+                return;
+
+            const config = JSON.parse(new TextDecoder().decode(bytes.get_data()));
+            this._setConnected(true);
+            this._tunItem.setToggleState(config.tun?.enable ?? false);
+            this._updateModeUI(config.mode ?? 'rule');
+        } catch (e) {
+            if (this._destroyed || _isCancelledError(e))
+                return;
+
+            log(`[GNOME Clash Control] Failed to fetch state: ${e.message}`);
+            this._setConnected(false);
+        }
     }
 
     _updateModeUI(activeMode) {
+        if (this._destroyed)
+            return;
+
         this._currentMode = activeMode;
         for (const [mode, item] of Object.entries(this._modeItems)) {
             item.setOrnament(
@@ -179,6 +256,9 @@ const ClashToggle = GObject.registerClass({
     }
 
     _setSystemProxy(enable) {
+        if (this._destroyed)
+            return;
+
         const { main, http, https, socks } = this._proxySettings;
         if (enable) {
             const host = this._settings.get_string('clash-host');
@@ -197,44 +277,68 @@ const ClashToggle = GObject.registerClass({
         }
     }
 
-    _setTunMode(enable) {
-        _apiCall(this._session, 'PATCH', this._getApiUrl('/configs'), this._getHeaders(),
-            JSON.stringify({ tun: { enable } }),
-        ).then(() => this._refreshState())
-         .catch(e => {
+    async _setTunMode(enable) {
+        if (this._destroyed)
+            return;
+
+        try {
+            const bytes = await this._apiCall('PATCH', '/configs', JSON.stringify({ tun: { enable } }));
+            if (!bytes || this._destroyed)
+                return;
+
+            this._refreshState();
+        } catch (e) {
+            if (this._destroyed || _isCancelledError(e))
+                return;
+
             log(`[GNOME Clash Control] Failed to toggle TUN: ${e.message}`);
             this._tunItem.setToggleState(!enable);
-         });
+        }
     }
 
-    _setProxyMode(mode) {
+    async _setProxyMode(mode) {
+        if (this._destroyed)
+            return;
+
         if (mode === this._currentMode) return;
         const prevMode = this._currentMode;
 
-        _apiCall(this._session, 'PATCH', this._getApiUrl('/configs'), this._getHeaders(),
-            JSON.stringify({ mode }),
-        ).then(() => this._refreshState())
-         .catch(e => {
+        try {
+            const bytes = await this._apiCall('PATCH', '/configs', JSON.stringify({ mode }));
+            if (!bytes || this._destroyed)
+                return;
+
+            this._refreshState();
+        } catch (e) {
+            if (this._destroyed || _isCancelledError(e))
+                return;
+
             log(`[GNOME Clash Control] Failed to set mode: ${e.message}`);
             this._updateModeUI(prevMode);
-         });
+        }
     }
 
     _openSettings() {
+        if (this._destroyed)
+            return;
+
         this.menu.close();
         Main.panel.statusArea.quickSettings.menu.close();
         Util.spawn(['gnome-extensions', 'prefs', EXTENSION_UUID]);
     }
 
     destroy() {
-        if (this._proxyModeHandler) {
-            this._proxySettings.main.disconnect(this._proxyModeHandler);
-            this._proxyModeHandler = null;
-        }
-        if (this._menuOpenHandler) {
-            this.menu.disconnect(this._menuOpenHandler);
-            this._menuOpenHandler = null;
-        }
+        if (this._destroyed)
+            return;
+
+        this._destroyed = true;
+        this._cancellable?.cancel();
+        this._signals?.destroy();
+        this._settings = null;
+        this._proxySettings = null;
+        this._session = null;
+        this._cancellable = null;
+        this._signals = null;
         super.destroy();
     }
 });
@@ -244,18 +348,18 @@ const ClashIndicator = GObject.registerClass({
 }, class ClashIndicator extends QuickSettings.SystemIndicator {
     _init(settings, session, proxySettings) {
         super._init();
-        this.quickSettingsItems.push(new ClashToggle(settings, session, proxySettings));
+        this._toggle = new ClashToggle(settings, session, proxySettings);
+        this.quickSettingsItems.push(this._toggle);
         Main.panel.statusArea.quickSettings.addExternalIndicator(this);
     }
 
     destroy() {
-        this.quickSettingsItems.forEach(item => item.destroy());
+        this._toggle?.destroy();
+        this._toggle = null;
         this.quickSettingsItems = [];
         super.destroy();
     }
 });
-
-let clashIndicator = null;
 
 export default class GnomeClashControlExtension extends Extension {
     enable() {
@@ -268,7 +372,7 @@ export default class GnomeClashControlExtension extends Extension {
             socks: new Gio.Settings({ schema_id: 'org.gnome.system.proxy.socks' }),
         };
 
-        clashIndicator = new ClashIndicator(
+        this._indicator = new ClashIndicator(
             this._settings,
             this._session,
             this._proxySettings,
@@ -276,14 +380,12 @@ export default class GnomeClashControlExtension extends Extension {
     }
 
     disable() {
-        if (clashIndicator) {
-            clashIndicator.destroy();
-            clashIndicator = null;
-        }
-        if (this._session) {
-            this._session.abort();
-            this._session = null;
-        }
+        this._indicator?.destroy();
+        this._indicator = null;
+
+        this._session?.abort();
+        this._session = null;
+
         this._settings = null;
         this._proxySettings = null;
     }
